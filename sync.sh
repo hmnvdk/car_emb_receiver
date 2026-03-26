@@ -64,8 +64,28 @@ cmd_setup() {
     exit 0
 }
 
+remote_has_branch() {
+    # есть ли refs/heads/$1 на origin после fetch
+    git ls-remote --heads origin "$1" 2>/dev/null | grep -q .
+}
+
 cmd_pull() {
     ensure_remote
+    git fetch origin
+
+    if ! remote_has_branch "$BRANCH"; then
+        echo "На GitHub нет ветки «$BRANCH» (или репозиторий ещё пустой)."
+        rh=$(git ls-remote --heads origin 2>/dev/null | awk '{print $2}' | sed 's|refs/heads/||' | tr '\n' ' ')
+        if [[ -z "${rh// }" ]]; then
+            echo "Удалённый репозиторий пуст: сначала отправьте код:"
+            echo "  $0 \"первый коммит\""
+        else
+            echo "Ветки на origin: $rh"
+            echo "Задайте в sync.local.conf подходящую ветку, например: BRANCH=\"master\""
+        fi
+        exit 1
+    fi
+
     git pull origin "$BRANCH"
 }
 
