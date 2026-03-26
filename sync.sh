@@ -1,12 +1,16 @@
 #!/bin/bash
 # Коммит + push в GitHub по данным из sync.local.conf (не коммитится в git).
+# Токен HTTPS: sync.secrets → локальный credential.helper (см. sync.secrets.example).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
 CONF="$SCRIPT_DIR/sync.local.conf"
 EXAMPLE="$SCRIPT_DIR/sync.local.conf.example"
+SECRETS="$SCRIPT_DIR/sync.secrets"
+SECRETS_EXAMPLE="$SCRIPT_DIR/sync.secrets.example"
+CRED_STORE="$SCRIPT_DIR/.git-credentials-local"
+
+GIT_ROOT=""
 
 usage() {
     echo "Использование:"
@@ -15,7 +19,43 @@ usage() {
     echo "  $0 push [сообщение]   — git add -A, commit (если есть изменения), push"
     echo "  $0 \"краткий текст\"    — то же, что push с сообщением коммита"
     echo ""
-    echo "Перед первым использованием: $0 setup  и пропишите REMOTE_URL в sync.local.conf"
+    echo "Перед первым использованием:"
+    echo "  1) $0 setup   и заполнить sync.local.conf (REMOTE_URL)"
+    echo "  2) cp sync.secrets.example sync.secrets  — вписать GITHUB_USER и GITHUB_TOKEN"
+}
+
+resolve_git_root() {
+    cd "$SCRIPT_DIR"
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        if [[ -d "$SCRIPT_DIR/source/.git" ]]; then
+            cd "$SCRIPT_DIR/source"
+        fi
+    fi
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        echo "Ошибка: положите sync.sh рядом с репозиторием git (каталог с .git) или используйте структуру …/AA2/source/.git"
+        exit 1
+    fi
+    GIT_ROOT=$(git rev-parse --show-toplevel)
+    cd "$GIT_ROOT"
+}
+
+setup_github_credentials() {
+    [[ -f "$SECRETS" ]] || return 0
+    set +u
+    # shellcheck disable=SC1090
+    source "$SECRETS"
+    set -u
+    if [[ -z "${GITHUB_USER:-}" || -z "${GITHUB_TOKEN:-}" ]]; then
+        return 0
+    fi
+    printf 'https://%s:%s@github.com\n' "$GITHUB_USER" "$GITHUB_TOKEN" > "$CRED_STORE"
+    chmod 600 "$CRED_STORE"
+    git -C "$GIT_ROOT" config --local credential.helper "store --file=$CRED_STORE"
+}
+
+prepare_git() {
+    resolve_git_root
+    setup_github_credentials
 }
 
 ensure_conf() {
@@ -53,23 +93,30 @@ ensure_remote() {
 cmd_setup() {
     if [[ -f "$CONF" ]]; then
         echo "Уже есть $CONF — отредактируйте вручную или удалите и запустите setup снова."
-        exit 0
+    else
+        if [[ ! -f "$EXAMPLE" ]]; then
+            echo "Нет файла $EXAMPLE"
+            exit 1
+        fi
+        cp "$EXAMPLE" "$CONF"
+        echo "Создан $CONF — укажите REMOTE_URL (и при необходимости BRANCH)."
     fi
-    if [[ ! -f "$EXAMPLE" ]]; then
-        echo "Нет файла $EXAMPLE"
-        exit 1
+    if [[ ! -f "$SECRETS" ]] && [[ -f "$SECRETS_EXAMPLE" ]]; then
+        cp "$SECRETS_EXAMPLE" "$SECRETS"
+        chmod 600 "$SECRETS"
+        echo "Создан $SECRETS — вставьте GITHUB_TOKEN (и проверьте GITHUB_USER)."
+    elif [[ -f "$SECRETS" ]]; then
+        echo "Файл $SECRETS уже есть."
     fi
-    cp "$EXAMPLE" "$CONF"
-    echo "Создан $CONF — откройте и укажите REMOTE_URL (и при необходимости BRANCH)."
     exit 0
 }
 
 remote_has_branch() {
-    # есть ли refs/heads/$1 на origin после fetch
     git ls-remote --heads origin "$1" 2>/dev/null | grep -q .
 }
 
 cmd_pull() {
+    prepare_git
     ensure_remote
     git fetch origin
 
@@ -95,6 +142,7 @@ cmd_push() {
         echo "Укажите сообщение коммита, например:  $0 push \"fix: тач\""
         exit 1
     fi
+    prepare_git
     ensure_remote
 
     git add -A
@@ -129,7 +177,6 @@ case "${1:-}" in
         cmd_push "$*"
         ;;
     *)
-        # Одна строка как сообщение коммита: ./sync.sh "сообщение"
         cmd_push "$*"
         ;;
 esac

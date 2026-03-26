@@ -14,13 +14,19 @@ python3 -m venv venv
 
 ## Скрипт `sync.sh` (коммит + push)
 
-1. Один раз: `cp sync.local.conf.example sync.local.conf` или `./sync.sh setup` — в **`sync.local.conf`** пропишите `REMOTE_URL` (и при необходимости `BRANCH`). Файл в git **не** коммитится.
+1. Один раз: **`./sync.sh setup`** — создаст **`sync.local.conf`** (URL репозитория) и **`sync.secrets`** (логин и токен). Либо скопируйте примеры вручную.
 
-2. Забрать с GitHub: `./sync.sh pull`
+2. В **`sync.local.conf`** укажите `REMOTE_URL` (HTTPS `https://github.com/…/….git`).
 
-3. Отправить изменения: `./sync.sh push "краткое сообщение коммита"` или `./sync.sh "краткое сообщение"`
+3. В **`sync.secrets`** укажите `GITHUB_USER` и **`GITHUB_TOKEN`** (Personal Access Token). Эти файлы в git **не** коммитятся; скрипт записывает токен в локальный **`credential.helper`** для этого репозитория (файл `.git-credentials-local`, тоже не в git).
+
+4. Забрать с GitHub: `./sync.sh pull`
+
+5. Отправить: `./sync.sh push "сообщение"` или `./sync.sh "сообщение"`
 
 Скрипт выполняет `git add -A`, при наличии правок — `commit`, затем `push` на `origin/$BRANCH`.
+
+Если используете **SSH** (`git@github.com:…`), токен в `sync.secrets` не нужен — оставьте переменные пустыми или не создавайте `sync.secrets`.
 
 ## Git и GitHub (вручную)
 

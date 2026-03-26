@@ -11,8 +11,10 @@ __pycache__/
 # Приватный репозиторий: ключи в certs/ можно держать в git (копируйте всю папку на машину).
 # Для публичного репо верните игнор: *.key и certs/*.key
 
-# Локальный URL GitHub (не коммитить)
+# Локальные настройки (не коммитить)
 sync.local.conf
+sync.secrets
+.git-credentials-local
 
 # IDE / OS
 .idea/
