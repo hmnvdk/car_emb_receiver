@@ -8,9 +8,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Secrets — не публиковать в открытый GitHub
-*.key
-certs/*.key
+# Приватный репозиторий: ключи в certs/ можно держать в git (копируйте всю папку на машину).
+# Для публичного репо верните игнор: *.key и certs/*.key
 
 # IDE / OS
 .idea/
