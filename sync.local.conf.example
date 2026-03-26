@@ -1,0 +1,9 @@
+# Скопируйте этот файл:  cp sync.local.conf.example sync.local.conf
+# Файл sync.local.conf в git не попадает — там можно держать URL приватного репо.
+
+# HTTPS: https://github.com/ЛОГИН/РЕПО.git
+# SSH:   git@github.com:ЛОГИН/РЕПО.git
+REMOTE_URL="https://github.com/ВАШ_ЛОГИН/ВАШ_РЕПО.git"
+
+# Ветка по умолчанию
+BRANCH="main"
