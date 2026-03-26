@@ -1,0 +1,14 @@
+# AA2 — сгенерированный hu_pb2 требует google.protobuf
+protobuf>=4.21.0
+
+# Протокол и USB
+pyopenssl>=23.0.0
+pyusb>=1.2.0
+
+# main.py
+pygame>=2.0.0
+av>=10.0.0
+numpy>=1.24.0
+
+# опционально: звук с телефона
+# pyaudio

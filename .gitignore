@@ -1,0 +1,19 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Secrets — не публиковать в открытый GitHub
+*.key
+certs/*.key
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
