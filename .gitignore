@@ -1,19 +1,28 @@
-# Python
-venv/
-.venv/
-__pycache__/
-*.py[cod]
-*$py.class
+# Политика репозитория: в origin только README.md и каталог source/
+# (этот файл нужен, чтобы не коммитить venv и кэши под source/)
+
+*
+!README.md
+!.gitignore
+!source/
+!source/**/*
+
+# Не коммитить окружение и мусор под source/
+source/venv/
+source/.venv/
+source/**/__pycache__/
+**/*.py[cod]
+**/$py.class
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 
-# Приватный репозиторий: ключи в certs/ можно держать в git (копируйте всю папку на машину).
-# Для публичного репо верните игнор: *.key и certs/*.key
-
-# Локальные настройки (не коммитить)
+# Локальные скрипты и секреты в корне (рядом с репо), не в git
+sync.sh
 sync.local.conf
+sync.local.conf.example
 sync.secrets
+sync.secrets.example
 .git-credentials-local
 
 # IDE / OS
