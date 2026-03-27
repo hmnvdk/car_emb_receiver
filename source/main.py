@@ -4,9 +4,21 @@ Python port of gartnera/headunit.
 
 Usage:
     ./run.sh [--cert jaguar|lr] [--debug] [--video-debug] [--no-audio] [-W W] [-H H] [-r WxH]
-             [--video-scale stretch|letterbox] [--video-preset WxH|auto]
-             [--proto-major N] [--proto-minor N] [--sw-version S] [--sw-build S]
-             [--nav-only]
+             [--video-scale stretch|letterbox] [--video-preset WxH|auto] [--touch-mode auto|native]
+             [--dpi N] [--dpi-scale F] [--driver-position lhd|rhd] [--proto-major N] [--proto-minor N]
+             [--sw-version S] [--sw-build S] [--nav-only]
+
+Роли флагов (коротко):
+  -r / -W -H     — размер окна pygame и база координат тача на экране.
+  --touch-mode  — какие размеры touch_screen слать в ServiceDiscovery (native = как окно; auto = в
+                  портрете часто max×min «альбом» для совместимости телефона).
+  --video-preset — только enum разрешения потока H.264 в ServiceDiscovery; окно не меняет.
+                  Если совпадает с -r, можно не указывать — автоподбор часто выберет то же.
+  --video-scale — только отрисовка: letterbox или stretch кадра в окне.
+  --dpi         — явный VideoConfig.dpi (если не задан — расчёт по площади × --dpi-scale).
+  --dpi-scale   — множитель к формуле dpi (по умолчанию 0.8); при --dpi не используется.
+  --driver-position — lhd/rhd; в proto driver_pos: False=LHD, True=RHD.
+  Портрет 1080×1920 — на практике стабильно до 240 dpi (см. README, hu_aap.VIDEO_DPI_PORTRAIT_1080X1920_MAX).
 """
 import argparse
 import logging
@@ -29,7 +41,15 @@ except ImportError:
 
 from proto_gen import hu_pb2 as HU
 
-from hu_aap   import HUServer, IHUCallbacks
+from hu_aap import (
+    DEFAULT_VIDEO_DPI_SCALE,
+    HUServer,
+    IHUCallbacks,
+    VIDEO_DPI_EXPLICIT_MAX,
+    VIDEO_DPI_EXPLICIT_MIN,
+    VIDEO_DPI_PORTRAIT_1080X1920_MAX,
+    resolve_video_preset,
+)
 from hu_const import (
     AA_CH_VID,
     AA_CH_AUD,
@@ -351,14 +371,10 @@ class AADisplay:
                                     )
                                 except Exception:
                                     pass
-                            # If a second finger appears, cancel forwarded touch (gesture reserved).
-                            if self._input is not None and len(self._finger_down) > 1 and self._finger_pressed:
-                                for pfid in list(self._finger_pressed):
-                                    ppid = self._finger_pid.get(pfid, 0)
-                                    psx, psy = self._finger_down.get(pfid, (sx, sy))
-                                    x, y = self._display_to_proto(int(psx), int(psy))
-                                    self._input.send_touch(x, y, _TOUCH_RELEASE, pointer_id=ppid)
-                                self._finger_pressed.clear()
+                            # Second+ finger (ладонь, шум тачскрина, pinch): не трогаем основной палец.
+                            # Раньше здесь слали RELEASE всем — на портретном высоком окне второй контакт
+                            # случается чаще, чем в альбоме, и тапы в навигатор срывались.
+                            if len(self._finger_down) > 1:
                                 continue
 
                             # Forward single-finger press to phone (skip if MOVE already synthesized PRESS).
@@ -1261,6 +1277,63 @@ def _protocol_touch_dims(win_w: int, win_h: int, touch_mode: str = "native") -> 
     return win_w, win_h, False
 
 
+def _log_cli_config_and_check(args, proto_w: int, proto_h: int, swapped: bool) -> None:
+    """
+    Сводка: кто из флагов за что отвечает, и предупреждение если -r и --video-preset расходятся.
+    """
+    tm = "auto" if swapped else "native"
+    touch_note = (
+        "портретное окно → touch в протоколе как альбом max×min (обход частых ограничений телефона)"
+        if swapped
+        else "touch в протоколе = размер окна"
+    )
+    lines = [
+        "——— эффективная конфигурация CLI ———",
+        f"  окно pygame: {args.width}×{args.height}  (-r или -W/-H)",
+        f"  touch_screen (ServiceDiscovery): {proto_w}×{proto_h}  (--touch-mode {tm}: {touch_note})",
+        f"  отрисовка кадра в окне: {args.video_scale}  (--video-scale; только letterbox/stretch)",
+    ]
+    pr = resolve_video_preset(args.video_preset)
+    if pr is not None:
+        rw, rh, _en = pr
+        lines.append(f"  видео enum (H.264 в SD): {rw}×{rh}  (--video-preset)")
+        if (rw, rh) != (args.width, args.height):
+            log.warning(
+                "Окно %d×%d ≠ --video-preset %d×%d: в ServiceDiscovery уйдут margin_* между кадром и touch; "
+                "координаты тача по-прежнему 0…%d × 0…%d. Проверьте, что так задумано.",
+                args.width,
+                args.height,
+                rw,
+                rh,
+                proto_w - 1,
+                proto_h - 1,
+            )
+        elif args.video_preset and str(args.video_preset).strip().lower() not in ("", "auto"):
+            lines.append(
+                "    (пресет совпадает с окном — --video-preset избыточен; без него hu_aap обычно "
+                "выберет тот же enum от touch UI)"
+            )
+    else:
+        lines.append(
+            "  видео enum: автоподбор в hu_aap по touch UI  (--video-preset не задан или auto)"
+        )
+    lines.append(
+        f"  декодер/маппинг тача: целевой кадр {proto_w}×{proto_h} (= размер touch в протоколе)"
+    )
+    lines.append(
+        f"  driver_pos (положение руля): {args.driver_position}  (--driver-position; lhd=левый, rhd=правый)"
+    )
+    if args.dpi is not None:
+        lines.append(
+            f"  VideoConfig.dpi: {args.dpi}  (--dpi; расчёт и --dpi-scale не используются)"
+        )
+    else:
+        lines.append(
+            f"  VideoConfig.dpi: формула по площади × {args.dpi_scale}  (--dpi-scale; явный --dpi отключает)"
+        )
+    log.info("\n".join(lines))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Android Auto Head Unit (gartnera port)")
     ap.add_argument("--cert",     choices=["jaguar", "lr"], default="jaguar",
@@ -1303,7 +1376,8 @@ def main():
         "--resolution",
         default=None,
         metavar="WxH",
-        help="Разрешение одной строкой (перекрывает -W/-H), например 800x480, 1280x720",
+        help="Размер окна pygame одной строкой (перекрывает -W/-H), напр. 800x480, 720x1280. "
+        "Задаёт базу координат тача на экране; не путать с --video-preset (enum потока H.264).",
     )
     ap.add_argument(
         "--proto-major",
@@ -1335,16 +1409,44 @@ def main():
         "--video-scale",
         choices=("stretch", "letterbox"),
         default="stretch",
-        help="Как вписать H.264 кадр в окно: stretch — на весь экран (как типичное ГУ; "
-        "нет полей при ультрашироком альбоме), letterbox — сохранять пропорции с полями",
+        help="Только отрисовка: как вписать декодированный кадр в окно pygame — stretch (на весь экран) "
+        "или letterbox (поля, без искажения). Не меняет протокол и размер touch_screen.",
+    )
+    ap.add_argument(
+        "--dpi",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Явный dpi в VideoConfig (ServiceDiscovery). Диапазон %d…%d. "
+        "Если задан — не используется формула по площади и флаг --dpi-scale. "
+        "Портрет 1080×1920: на практике не выше %d dpi. "
+        "Ориентиры: 140 (800×480), 160 (mdpi), 170–213, 213/238 для крупных HU — см. README и hu_aap.py."
+        % (VIDEO_DPI_EXPLICIT_MIN, VIDEO_DPI_EXPLICIT_MAX, VIDEO_DPI_PORTRAIT_1080X1920_MAX),
+    )
+    ap.add_argument(
+        "--dpi-scale",
+        type=float,
+        default=DEFAULT_VIDEO_DPI_SCALE,
+        metavar="F",
+        help="Множитель к расчётному dpi в VideoConfig (база 140 при 800×480, дальше √площадь). "
+        "По умолчанию %(default)s (~на 20%% ниже «сырой» формулы; в портрете часто лучше совпадение UI/тач). "
+        "Игнорируется при --dpi. Допустимо примерно 0.05…4.0.",
+    )
+    ap.add_argument(
+        "--driver-position",
+        choices=("lhd", "rhd"),
+        default="lhd",
+        help="Положение руля для ServiceDiscovery.driver_pos: lhd — левый руль (LHD, как в РФ/США/ЕС), "
+        "rhd — правый руль (RHD, UK/Япония и т.д.). В protobuf для телефона: False=LHD, True=RHD.",
     )
     ap.add_argument(
         "--video-preset",
         default=None,
         metavar="WxH",
-        help="Принудительный enum видео из таблицы реверса (например 1280x720, 1920x1080, "
-        "800x480). Свой экран по-прежнему -W/-H (touch); margins связывают пресет с ним. "
-        "Без флага — автоподбор. Список: см. resolve_video_preset / лог при ошибке.",
+        help="Принудительный enum разрешения потока H.264 в ServiceDiscovery (таблица из реверса: "
+        "1280x720, 720x1280, …). Размер окна по-прежнему задаёт только -r/-W/-H; при несовпадении с окном "
+        "hu_aap шлёт margin_*. Если пресет совпадает с окном, флаг часто не нужен — сработает автоподбор. "
+        "Список допустимых пар: см. resolve_video_preset в hu_aap.py.",
     )
     ap.add_argument(
         "--touch-mode",
@@ -1352,7 +1454,8 @@ def main():
         default="native",
         help="Как объявлять touch_screen в ServiceDiscovery: native — как окно (в т.ч. книжный), чтобы "
         "согласовать портретный видеопресет (720x1280 и т.д.); auto — для handshake развернуть портрет "
-        "окна в альбом max×min (часто ландшафтный поток на вертикальном дисплее). По умолчанию native.",
+        "окна в альбом max×min (часто ландшафтный поток на вертикальном дисплее). По умолчанию native. "
+        "Если в портрете навигатор не реагирует на тапы, попробуйте --touch-mode auto.",
     )
     args = ap.parse_args()
 
@@ -1364,6 +1467,15 @@ def main():
 
     if not (320 <= args.width <= 4096 and 240 <= args.height <= 4096):
         ap.error("width/height вне допустимого диапазона (320…4096 × 240…4096)")
+
+    if not (0.05 <= args.dpi_scale <= 4.0):
+        ap.error("--dpi-scale должен быть в диапазоне 0.05…4.0")
+
+    if args.dpi is not None and not (VIDEO_DPI_EXPLICIT_MIN <= args.dpi <= VIDEO_DPI_EXPLICIT_MAX):
+        ap.error(
+            "--dpi должен быть в диапазоне %d…%d"
+            % (VIDEO_DPI_EXPLICIT_MIN, VIDEO_DPI_EXPLICIT_MAX)
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
@@ -1396,6 +1508,14 @@ def main():
         args.video_scale,
         " — touch для handshake развёрнут из портретного окна" if swapped else "",
     )
+    _log_cli_config_and_check(args, proto_w, proto_h, swapped)
+    if args.dpi is not None and args.dpi_scale != DEFAULT_VIDEO_DPI_SCALE:
+        log.info(
+            "Задан --dpi: множитель --dpi-scale=%s для VideoConfig не применяется.",
+            args.dpi_scale,
+        )
+    if not args.debug and args.video_debug:
+        log.info("Для логов touch→phone добавьте также --debug (логгер touch в DEBUG).")
 
     # Create HUServer first so AppCallbacks can reference it
     hu = HUServer(
@@ -1408,6 +1528,9 @@ def main():
         sw_version=args.sw_version,
         sw_build=args.sw_build,
         video_preset=args.video_preset,
+        video_dpi_scale=args.dpi_scale,
+        video_dpi=args.dpi,
+        driver_pos=(args.driver_position == "rhd"),
     )
     cb = AppCallbacks(
         video_queue=video_queue,

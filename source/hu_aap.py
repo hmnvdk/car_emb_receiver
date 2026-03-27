@@ -158,11 +158,34 @@ def _video_margins_for_mode(Rw: int, Rh: int, touch_w: int, touch_h: int) -> tup
     return (abs(Rw - touch_w), abs(Rh - touch_h))
 
 
-def _video_dpi_for_touch(touch_w: int, touch_h: int) -> int:
-    """База 140 dpi при 800×480; масштабируем по площади, разумные пределы."""
+# Значение по умолчанию для CLI `--dpi-scale` и для HUServer.video_dpi_scale.
+DEFAULT_VIDEO_DPI_SCALE = 0.8
+
+# Явный VideoConfig.dpi (proto: uint32) — разумные границы для CLI `--dpi`.
+# Типовые значения из реверсов/обсуждений AA (не спецификация Google):
+#   140 — частая база для 800×480 (gartnera/аналоги);
+#   160 — опорный «mdpi» Android;
+#   170–213 — попадаются в примерах VideoConfiguration / форумах;
+#   213, 238 — крупные/Hi-DPI ГУ (в т.ч. обсуждения на XDA).
+#
+# Портретное окно 1080×1920 (native touch): в AA2 на практике стабильная работа
+# при VideoConfig.dpi не выше этого значения; выше — типично сбои/некорректный UI.
+VIDEO_DPI_PORTRAIT_1080X1920_MAX = 240
+
+VIDEO_DPI_EXPLICIT_MIN = 40
+VIDEO_DPI_EXPLICIT_MAX = 400
+
+
+def _clamp_video_dpi_explicit(d: int) -> int:
+    return max(VIDEO_DPI_EXPLICIT_MIN, min(VIDEO_DPI_EXPLICIT_MAX, int(d)))
+
+
+def _video_dpi_for_touch(touch_w: int, touch_h: int, dpi_scale: float) -> int:
+    """База 140 dpi при 800×480; масштабируем по площади, ×dpi_scale, пределы 80–260."""
     base = 800 * 480
     area = max(1, touch_w * touch_h)
-    d = int(140 * math.sqrt(area / base))
+    s = max(0.05, min(4.0, float(dpi_scale)))
+    d = int(140 * math.sqrt(area / base) * s)
     return max(80, min(260, d))
 
 
@@ -291,11 +314,20 @@ class HUServer:
         sw_version: Optional[str] = None,
         sw_build: Optional[str] = None,
         video_preset: Optional[str] = None,
+        video_dpi_scale: float = DEFAULT_VIDEO_DPI_SCALE,
+        video_dpi: Optional[int] = None,
+        driver_pos: bool = False,
     ):
         self._cb         = callbacks
         self._cert_type  = cert_type
         self._video_w    = max(1, int(video_width))
         self._video_h    = max(1, int(video_height))
+        self._video_dpi_scale = max(0.05, min(4.0, float(video_dpi_scale)))
+        self._video_dpi_explicit: Optional[int] = (
+            None if video_dpi is None else _clamp_video_dpi_explicit(video_dpi)
+        )
+        # ServiceDiscoveryResponse.driver_pos: на телефоне в AA2 эмпирически False=LHD, True=RHD.
+        self._driver_pos = bool(driver_pos)
         self._video_preset_resolved = resolve_video_preset(video_preset)
         self._vr_major   = AA_VERSION_MAJOR if proto_major is None else int(proto_major)
         self._vr_minor   = AA_VERSION_MINOR if proto_minor is None else int(proto_minor)
@@ -789,7 +821,7 @@ class HUServer:
         car.car_model      = "Raspberry"
         car.car_year       = str(datetime.now().year)
         car.car_serial     = "0001"
-        car.driver_pos     = True
+        car.driver_pos     = self._driver_pos
         # Как в gartnera: sw_version / sw_build не привязаны к номеру протокола (там "SWV1"/"SWB1").
         car.sw_version = self._sw_version
         car.sw_build   = self._sw_build
@@ -853,10 +885,15 @@ class HUServer:
         vc.margin_width, vc.margin_height = _video_margins_for_mode(
             Rw, Rh, self._video_w, self._video_h
         )
-        vc.dpi = _video_dpi_for_touch(self._video_w, self._video_h)
+        if self._video_dpi_explicit is not None:
+            vc.dpi = self._video_dpi_explicit
+            dpi_note = " (dpi задан явно)"
+        else:
+            vc.dpi = _video_dpi_for_touch(self._video_w, self._video_h, self._video_dpi_scale)
+            dpi_note = ""
         inner.available_while_in_call = True
         log.info(
-            "Видео: touch UI %dx%d → кадр режима %dx%d, margin_width=%d margin_height=%d dpi=%d%s",
+            "Видео: touch UI %dx%d → кадр режима %dx%d, margin_width=%d margin_height=%d dpi=%d%s%s",
             self._video_w,
             self._video_h,
             Rw,
@@ -865,6 +902,7 @@ class HUServer:
             vc.margin_height,
             vc.dpi,
             preset_note,
+            dpi_note,
         )
 
         # Media audio channel (AA_CH_AUD = 4, stereo 48 kHz)
@@ -903,7 +941,12 @@ class HUServer:
         self._cb.customize_car_info(car)
 
         ret = self._enc_send_message(0, chan, HU_MSG_ServiceDiscoveryResponse, car)
-        log.info("ServiceDiscoveryResponse → телефон (%d каналов)", len(car.channels))
+        log.info(
+            "ServiceDiscoveryResponse → телефон (%d каналов), driver_pos=%s (%s)",
+            len(car.channels),
+            self._driver_pos,
+            "RHD" if self._driver_pos else "LHD",
+        )
         return ret
 
     def _handle_channel_open(self, chan: int, body: bytes) -> int:
